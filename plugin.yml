@@ -1,0 +1,7 @@
+---
+name: TrialTreasure
+version: 0.0.1
+main: Lay\TrialTreasure\TrialTreasureMain
+api: 5.15.0
+load: STARTUP
+...
