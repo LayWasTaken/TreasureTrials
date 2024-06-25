@@ -11,9 +11,11 @@ use Lay\TrialTreasure\particles\EntitySpawnParticle;
 use Lay\TrialTreasure\tasks\AnimatedParticleTask;
 use Lay\TrialTreasure\tasks\TrialReactivationTask;
 use pocketmine\block\VanillaBlocks;
+use pocketmine\entity\Location;
 use pocketmine\nbt\tag\CompoundTag;
 use pocketmine\nbt\tag\ListTag;
 use pocketmine\item\Item;
+use pocketmine\math\Vector3;
 use pocketmine\nbt\tag\IntTag;
 use pocketmine\player\Player;
 use pocketmine\scheduler\ClosureTask;
@@ -32,6 +34,8 @@ abstract class TrialTreasure implements BlockData {
     public const REACTIVATION_TIME = 20;
     protected const DEFAULT_TIME_LIMIT = 120;
 
+    private const DEFAULT_AREA = [-1, 1];
+
     // Tag Names
     protected const DIFFICULTY = "difficulty";
     protected const ACTIVE = "active";
@@ -47,13 +51,12 @@ abstract class TrialTreasure implements BlockData {
     private ?Generator $waves = null;
     private ?FloatingTextEntity $textEntity = null;
     private int $lastDeactivation = 0;
-    private array $currentEnemies = [];
     private Position $position;
     private bool $valid = true;
-    
-    // Temporary Data
-    private int $enemyCount = 0;
 
+    /**@var TreasureEnemy[] */
+    private array $currentEnemies = [];
+    
     public function __construct(Position $position){
         $this->position = $position;
     }
@@ -115,16 +118,10 @@ abstract class TrialTreasure implements BlockData {
         return $this->lastDeactivation;
     }
 
-    public function enemyKill(){
-        if($this->enemyCount-- <= 0 || !$this->enemyCount == 0) return;
-        $entities = $this->nextWave();
-        if($entities) return TrialTreasureMain::getInstance()->getScheduler()->scheduleDelayedTask(new ClosureTask(function() use ($entities){
-            foreach ($entities as $entity) {
-                $pos = $entity->getPosition();
-                TrialTreasureMain::getInstance()->getScheduler()->scheduleRepeatingTask(new AnimatedParticleTask(EntitySpawnParticle::class, $pos), 2);
-                $entity->spawnToAll(); 
-            }
-        }), 20);
+    public function enemyKill(int $id){
+        $this->removeEnemy($id);
+        $this->spawnEnemies();
+        if(!empty($this->currentEnemies)) return;
         if(!$this->challenger->isOnline()) $this->challenger = Server::getInstance()->getPlayerByUUID($this->challenger->getUniqueId());
         $top = $this->position->add(0.5, 1.5, 0.5);
         $world = $this->position->getWorld();
@@ -133,10 +130,6 @@ abstract class TrialTreasure implements BlockData {
         $this->deactivate();
         $this->scheduleReactivation();
         $this->setFloatingTextInfo($this->position);
-    }
-
-    public function getEnemyCount(){
-        return $this->enemyCount;
     }
 
     public function activate():bool {
@@ -159,7 +152,6 @@ abstract class TrialTreasure implements BlockData {
         $this->active = false;
         $this->challenger = null;
         $this->waves = null;
-        $this->enemyCount = 0;
         $this->lastDeactivation = time();
         $this->textEntity?->finishTimer();
         return true;
@@ -191,37 +183,39 @@ abstract class TrialTreasure implements BlockData {
                 $this->challenger = null;
                 return false;
         }
-        /**@var EnemyWaves */
-        $class = $this->getWaveClass();
-        $this->waves = $class::getWaves($this->challenger, $this->position, $this->difficulty);
-        $entities = $this->waves->current();
-        if(!$entities){
+        $this->spawnEnemies();
+        if(count($this->currentEnemies) <= 0){
+            var_dump($this->currentEnemies);
             $this->deactivate();
             $this->setFloatingTextInfo();
             return false;
         }
-        $this->enemyCount = count($entities);
-        $this->currentEnemies = $entities;
         $this->startEntityTimer();
-        TrialTreasureMain::getInstance()->getScheduler()->scheduleDelayedTask(new ClosureTask(function() use ($entities){
-            foreach ($entities as $entity) {
-                $pos = $entity->getPosition();
-                TrialTreasureMain::getInstance()->getScheduler()->scheduleRepeatingTask(new AnimatedParticleTask(EntitySpawnParticle::class, $pos), 2);
-                $entity->spawnToAll(); 
-            }
-        }), 20);
         return true;
     }
 
-    protected function nextWave(){
+    private function removeEnemy(int $id){
+        if(!array_key_exists($id, $this->currentEnemies)) return false;
+        $enemy = $this->currentEnemies[$id];
+        if(!$enemy instanceof TreasureEnemy) return false;
+        if($enemy->isAlive()) $enemy->flagForDespawn();
+        unset($this->currentEnemies[$id]);
+        return true;
+    }
+
+    private function spawnEnemies(){
+        if(!$this->waves) $this->waves = $this->getWaves();
+        if(!$this->waves->valid()) return false;
         $this->waves->next();
-        $current = $this->waves->current();
-        if(!is_array($current)) {
-            return [];
-        }
-        $this->enemyCount = count($current);
-        $this->currentEnemies = $current;
-        return $current;
+        $enemy = $this->waves->current();
+        if(!$enemy instanceof TreasureEnemy) return false;
+        $this->currentEnemies[$enemy->getId()] = $enemy;
+        $pos = $enemy->getPosition();
+        TrialTreasureMain::getInstance()->getScheduler()->scheduleRepeatingTask(new AnimatedParticleTask(EntitySpawnParticle::class, $pos), 2);
+        $enemy->spawnToAll(); 
+        if(count($this->currentEnemies) < $this->getMaxActiveEnemies()) 
+            if(!$this->spawnEnemies()) return false;
+        return true;
     }
 
     public function getCurrentWave(){
@@ -292,11 +286,14 @@ abstract class TrialTreasure implements BlockData {
         $world->setBlockAt($pos->x, $pos->y, $pos->z, VanillaBlocks::AIR());
     }
 
-    /**@return TreasureEnemy[] */
-    public function getCurrentEnemies(){
-        return $this->currentEnemies;
+    protected function getRandomSafeSpawn(): Vector3{
+        $x = mt_rand(-1, 1);
+        $z = $x == 0 ? self::DEFAULT_AREA[array_rand(self::DEFAULT_AREA)] : mt_rand(-1, 1);
+        return Location::fromObject($this->position->add($x + 0.5, 0, $z + 0.5), $this->position->getWorld(), mt_rand(0, 35) * 100);
     }
 
+    public function getPosition(){ return $this->position->asPosition(); }
+    
     public function getChallenger(){ return $this->challenger; }
 
     protected function onEasy(){ }
@@ -305,11 +302,14 @@ abstract class TrialTreasure implements BlockData {
 
     protected function onHard(){ }
 
-    protected abstract static function getWaveClass(): string;
+    /**Total max active enemies before spawning new ones*/
+    protected abstract function getMaxActiveEnemies(): int;
 
     /**
      * @return Item[]
      */
     protected abstract function getRewards(): array;
 
+    public abstract function getWaves(): Generator;
+    
 }

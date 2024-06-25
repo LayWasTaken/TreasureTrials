@@ -9,7 +9,7 @@ use Lay\TrialTreasure\entity\enemies\Zombie;
 use Lay\TrialTreasure\TrialTreasure;
 use pocketmine\item\VanillaItems;
 
-class AmethystTrials extends TrialTreasure implements EnemyWaves {
+class AmethystTrials extends TrialTreasure {
 
     public function getWaves(): Generator{
         yield Skeleton::create($this->getRandomSafeSpawn(), $this);
@@ -34,10 +34,6 @@ class AmethystTrials extends TrialTreasure implements EnemyWaves {
             VanillaItems::GOLD_INGOT()->setCount(9),
             VanillaItems::DIAMOND()->setCount(6)
         ];
-    }
-
-    protected static function getWaveClass(): string{
-        return self::class;
     }
 
     protected function getMaxActiveEnemies(): int{
