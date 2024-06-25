@@ -13,36 +13,27 @@ abstract class TreasureEnemy extends Living {
 
     const TRIAL_ORIGIN = "origin";
 
-    protected ?TrialTreasure $trialOrigin = null;
-    protected ?Position $trialOriginPosition = null;
     protected int $originCheck = 0;
 
-    public static function create(Location $location, ?Position $origin = null, ?CompoundTag $nbt = null){
+    public static function create(Location $location, ?TrialTreasure $origin = null, ?CompoundTag $nbt = null){
         return new static($location, $nbt, $origin);
     }
 
-    public function __construct(Location $location, ?CompoundTag $nbt = null, ?Position $origin = null){
-        $manager = TrialTreasureMain::getInstance()->getManager();
+    public function __construct(Location $location, ?CompoundTag $nbt = null, protected ?TrialTreasure $origin = null){
+        parent::__construct($location, $nbt);
         if(!$origin) {
-            parent::__construct($location, $nbt);
             $this->flagForDespawn();
-        }
-        else{
-            $blockData = $manager->get($origin->getWorld())->getBlockDataAt($origin->x, $origin->y, $origin->z);
-            $this->trialOrigin = $blockData;
-            $this->trialOriginPosition = $origin;
-            parent::__construct($location, $nbt);
         }
     }
 
     /**@return TrialTreasure */
     public function getTrialOrigin(){
-        return $this->trialOrigin;
+        return $this->origin;
     }
 
     protected function onDeath(): void {
-        if(!$this->trialOrigin instanceof TrialTreasure) {parent::onDeath(); return;}
-        $this->trialOrigin->enemyKill();
+        if(!$this->origin instanceof TrialTreasure) {parent::onDeath(); return;}
+        $this->origin->enemyKill($this->getId());
         parent::onDeath();
     }
 
